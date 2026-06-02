@@ -49,7 +49,7 @@ class CarteraRepository {
     return localData.map((e) => CarteraDiariaModel.fromSqlite(e)).toList();
   }
 
-  /// RF-17: Guardar el resultado de la visita (Motor offline-first)
+  /// RF-17: Guardar el resultado de la visita en tabla visitas
   Future<void> registrarVisita({
     required String carteraId,
     required String resultado,
@@ -58,34 +58,54 @@ class CarteraRepository {
     double? lng,
     required bool isOnline,
   }) async {
-    final timestamp = DateTime.now().toIso8601String();
-
-    final dataLocalYRemoto = {
+    final dataVisita = {
       'estado_visita': 'visitado',
       'resultado_visita': resultado,
       'observacion_visita': observacion,
-      'timestamp_visita': timestamp,
+      'timestamp_visita': DateTime.now().toIso8601String(),
       'lat_visita': lat,
       'lng_visita': lng,
     };
 
-    // 1. Actualizar caché local de inmediato para feedback visual rápido
-    await _localDb.updateEstadoVisita(carteraId, dataLocalYRemoto);
+    // Actualizar caché local
+    await _localDb.updateEstadoVisita(carteraId, dataVisita);
 
     if (isOnline) {
       try {
-        // Enviar directo a Supabase
-        await _supabase
+        // Obtener datos de cartera para conseguir cliente_id y asesor_id
+        final carteraData = await _supabase
             .from('cartera_diaria')
-            .update(dataLocalYRemoto)
-            .eq('id', carteraId);
-      } catch (e) {
-        // Si el envío falla en plena transacción, lo mandamos a la cola offline
-        await _guardarEnColaOffline(carteraId, resultado, observacion, timestamp, lat, lng);
+            .select('cliente_id, asesor_id')
+            .eq('id', carteraId)
+            .single();
+
+        final clienteId = carteraData['cliente_id'] as String;
+        final asesorId = carteraData['asesor_id'] as String;
+
+        // Mapear resultado a valores válidos de la tabla
+        final resultadoMapeado = resultado.contains('Visitado')
+            ? 'visitado'
+            : resultado.contains('No encontrado')
+                ? 'no_encontrado'
+                : 'negocio_cerrado';
+
+        // Insertar en tabla visitas
+        await _supabase.from('visitas').insert({
+          'asesor_id': asesorId,
+          'cliente_id': clienteId,
+          'cartera_diaria_id': carteraId,
+          'resultado': resultadoMapeado,
+          'observacion': observacion,
+          'lat': lat,
+          'lng': lng,
+        });
+      } catch (_) {
+        // Guardar en cola offline si falla
+        await _guardarEnColaOffline(carteraId, resultado, observacion, DateTime.now().toIso8601String(), lat, lng);
       }
     } else {
-      // 2. Si está offline, se encola en la tabla visitas_pendientes
-      await _guardarEnColaOffline(carteraId, resultado, observacion, timestamp, lat, lng);
+      // Offline: guardar en cola
+      await _guardarEnColaOffline(carteraId, resultado, observacion, DateTime.now().toIso8601String(), lat, lng);
     }
   }
 

@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../auth/presentation/login_viewmodel.dart';
 import '../data/solicitud_repository.dart';
-import '../data/expediente_service.dart';
 
-class TransmisionScreen extends StatefulWidget {
+class TransmisionScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> solicitudData;
   final int documentosCount;
 
@@ -14,10 +15,10 @@ class TransmisionScreen extends StatefulWidget {
   });
 
   @override
-  State<TransmisionScreen> createState() => _TransmisionScreenState();
+  ConsumerState<TransmisionScreen> createState() => _TransmisionScreenState();
 }
 
-class _TransmisionScreenState extends State<TransmisionScreen> {
+class _TransmisionScreenState extends ConsumerState<TransmisionScreen> {
   late List<_Paso> pasos;
   int pasoActual = 0;
   String? numeroExpediente;
@@ -38,6 +39,16 @@ class _TransmisionScreenState extends State<TransmisionScreen> {
 
   void _iniciarTransmision() async {
     final repo = SolicitudRepository();
+    final asesorState = ref.read(loginViewModelProvider);
+    final asesor = asesorState.asesor;
+
+    if (asesor == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Error: No hay sesión activa')),
+      );
+      return;
+    }
 
     for (int i = 0; i < pasos.length; i++) {
       if (!mounted) return;
@@ -52,17 +63,16 @@ class _TransmisionScreenState extends State<TransmisionScreen> {
           // Subir documentos (simulado)
           await Future.delayed(const Duration(milliseconds: 1000));
         } else if (i == 2) {
-          // Registrar en BD
-          await repo.guardarSolicitud(
-            clienteId: 'temp-cliente',
-            asesorId: 'temp-asesor',
-            agenciaId: 'temp-agencia',
+          // Registrar en BD con datos reales
+          numeroExpediente = await repo.guardarSolicitud(
+            clienteNombre: widget.solicitudData['cliente'] as String? ?? 'Cliente',
+            asesorId: asesor.id,
+            agenciaId: asesor.agenciaId,
             datos: widget.solicitudData,
           );
           await Future.delayed(const Duration(milliseconds: 800));
         } else if (i == 3) {
-          // Generar expediente
-          numeroExpediente = await ExpedienteService.generarNumero();
+          // El número ya fue generado en paso 2
           await Future.delayed(const Duration(milliseconds: 600));
         } else if (i == 4) {
           // Completar
@@ -70,8 +80,8 @@ class _TransmisionScreenState extends State<TransmisionScreen> {
           setState(() => completado = true);
         }
       } catch (e) {
-        // Error: generar expediente fallback
-        if (i == 3) {
+        if (i == 2) {
+          // Error guardando: generar expediente fallback
           numeroExpediente = 'EXP-${DateTime.now().millisecondsSinceEpoch.toString().substring(4)}';
         }
       }
